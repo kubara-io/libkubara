@@ -1,0 +1,9 @@
+apiVersion: platform.example.io/v1alpha1
+kind: Project
+metadata:
+  name: storefront
+  namespace: platforms
+spec:
+  owner: platform-team
+  stage: prod
+  replicas: 2
