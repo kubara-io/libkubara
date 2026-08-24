@@ -3,7 +3,7 @@ LOCALBIN ?= $(shell pwd)/bin
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_VERSION ?= v2.12.2
 
-.PHONY: help test test-consumer fmt fmt-check vet lint tidy check
+.PHONY: help test test-consumer test-cert-manager fmt fmt-check vet lint tidy check
 
 ##@ General
 
@@ -18,15 +18,20 @@ test: ## Run tests for the library module.
 test-consumer: ## Run tests for the consumer example module.
 	cd examples/consumer && $(GO) test ./...
 
+test-cert-manager: ## Run tests for the cert-manager example module.
+	cd examples/cert-manager && $(GO) test ./...
+
 ##@ Development
 
-fmt: ## Format Go source files in both modules.
+fmt: ## Format Go source files in all modules.
 	$(GO) fmt ./...
 	cd examples/consumer && $(GO) fmt ./...
+	cd examples/cert-manager && $(GO) fmt ./...
 
 fmt-check: ## Verify Go source files are formatted.
 	@test -z "$$($(GO)fmt -l .)"
 	@test -z "$$(cd examples/consumer && $(GO)fmt -l .)"
+	@test -z "$$(cd examples/cert-manager && $(GO)fmt -l .)"
 
 vet: ## Run go vet for the library module.
 	$(GO) vet ./...
@@ -40,8 +45,9 @@ $(GOLANGCI_LINT): | $(LOCALBIN)
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
-tidy: ## Tidy dependencies for both modules.
+tidy: ## Tidy dependencies for all modules.
 	$(GO) mod tidy
 	cd examples/consumer && $(GO) mod tidy
+	cd examples/cert-manager && $(GO) mod tidy
 
-check: fmt-check vet lint test test-consumer ## Run formatting, vetting, linting, and all tests.
+check: fmt-check vet lint test test-consumer test-cert-manager ## Run formatting, vetting, linting, and all tests.

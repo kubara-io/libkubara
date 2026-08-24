@@ -79,6 +79,37 @@ generated/project.txt: Project storefront runs in dev with 1 replica(s)
 generated/static.txt: copied unchanged
 ```
 
+## Operator types & prevalidation example
+
+[`examples/cert-manager`](examples/cert-manager) demonstrates consuming an existing operator CRD (cert-manager `Issuer`), prevalidating custom resources locally in a CLI without a running Kubernetes apiserver, and parsing the normalized/defaulted output into kubebuilder-generated Go types (`certmanagerv1.Issuer`):
+
+- [`issuer-crd.yaml`](examples/cert-manager/issuer-crd.yaml)
+- [`issuer-valid.yaml`](examples/cert-manager/issuer-valid.yaml)
+- [`issuer-invalid.yaml`](examples/cert-manager/issuer-invalid.yaml)
+
+Run it with:
+
+```bash
+cd examples/cert-manager
+go run .
+```
+
+Expected output:
+
+```text
+=== Scenario 1: Prevalidate valid Issuer & parse into certmanagerv1.Issuer ===
+Validated CR: default/letsencrypt-staging
+ACME Server: https://acme-staging-v02.api.letsencrypt.org/directory
+ACME Email: user@example.com
+ACME Secret: letsencrypt-staging-key (key: tls.key)
+Solvers count: 1
+
+=== Scenario 2: Prevalidate invalid Issuer (missing required fields) ===
+Local validation error caught:
+validate CR: spec.acme.server: spec.acme.server: Required value
+spec.acme.privateKeySecretRef: spec.acme.privateKeySecretRef: Required value
+```
+
 ## Consumer call structure
 
 ```go
