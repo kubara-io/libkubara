@@ -232,4 +232,126 @@ spec:
 	if err != nil || string(nilYAML) != "null\n" {
 		t.Fatalf("expected null\\n for nil object YAML, got %s, err=%v", string(nilYAML), err)
 	}
+	nilYAMLAny, err := nilObj.MarshalYAML()
+	if err != nil || nilYAMLAny != nil {
+		t.Fatalf("expected nil for nil object MarshalYAML, got %v, err=%v", nilYAMLAny, err)
+	}
+}
+
+func TestManifestNewAndData(t *testing.T) {
+	// New with nil
+	if _, err := manifest.New(nil); err == nil {
+		t.Fatal("expected error for manifest.New(nil)")
+	}
+
+	// New with valid data
+	data := map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":      "web",
+			"namespace": "staging",
+		},
+	}
+	obj, err := manifest.New(data)
+	if err != nil {
+		t.Fatalf("manifest.New failed: %v", err)
+	}
+
+	if obj.APIVersion() != "apps/v1" || obj.Kind() != "Deployment" {
+		t.Fatalf("unexpected APIVersion/Kind: %s/%s", obj.APIVersion(), obj.Kind())
+	}
+
+	// Data returns deep copy
+	copied := obj.Data()
+	if copied["kind"] != "Deployment" {
+		t.Fatalf("unexpected Data content: %v", copied)
+	}
+	// Modifying copied data shouldn't affect obj
+	copied["kind"] = "DaemonSet"
+	if obj.Kind() != "Deployment" {
+		t.Fatal("Data() did not return a deep copy")
+	}
+
+	// Data on nil object
+	var nilObj *manifest.Object
+	if nilObj.Data() != nil {
+		t.Fatal("expected nil Data() for nil object")
+	}
+}
+
+func TestNilObjectSafety(t *testing.T) {
+	var nilObj *manifest.Object
+
+	if nilObj.APIVersion() != "" || nilObj.Kind() != "" || nilObj.Name() != "" || nilObj.Namespace() != "" {
+		t.Fatal("expected empty strings from nil object getters")
+	}
+	if nilObj.Labels() != nil || nilObj.Annotations() != nil {
+		t.Fatal("expected nil map from nil object Labels/Annotations")
+	}
+
+	if val, found, err := nilObj.NestedString("a"); found || err != nil || val != "" {
+		t.Fatal("unexpected NestedString on nil")
+	}
+	if val, found, err := nilObj.NestedInt64("a"); found || err != nil || val != 0 {
+		t.Fatal("unexpected NestedInt64 on nil")
+	}
+	if val, found, err := nilObj.NestedBool("a"); found || err != nil || val != false {
+		t.Fatal("unexpected NestedBool on nil")
+	}
+	if val, found, err := nilObj.NestedSlice("a"); found || err != nil || val != nil {
+		t.Fatal("unexpected NestedSlice on nil")
+	}
+	if val, found, err := nilObj.NestedMap("a"); found || err != nil || val != nil {
+		t.Fatal("unexpected NestedMap on nil")
+	}
+}
+
+func TestDecodeEdgeCases(t *testing.T) {
+	// Decode nil reader
+	if _, err := manifest.Decode(nil); err == nil {
+		t.Fatal("expected error for Decode(nil)")
+	}
+
+	// Decode empty / null / blank documents
+	emptyYAML := `
+---
+# empty doc
+---
+null
+---
+`
+	objs, err := manifest.DecodeString(emptyYAML)
+	if err != nil {
+		t.Fatalf("unexpected error for empty docs: %v", err)
+	}
+	if len(objs) != 0 {
+		t.Fatalf("expected 0 objects, got %d", len(objs))
+	}
+
+	// DecodeOne with 0 objects
+	if _, err := manifest.DecodeOneString(emptyYAML); err == nil {
+		t.Fatal("expected error for DecodeOne on empty yaml")
+	}
+
+	// DecodeOne with multiple objects
+	multiYAML := `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm2
+`
+	if _, err := manifest.DecodeOneString(multiYAML); err == nil {
+		t.Fatal("expected error for DecodeOne on multi-object yaml")
+	}
+
+	// Decode invalid YAML syntax
+	if _, err := manifest.DecodeString(":\ninvalid: ["); err == nil {
+		t.Fatal("expected error for invalid YAML syntax")
+	}
 }

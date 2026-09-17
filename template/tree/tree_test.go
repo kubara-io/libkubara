@@ -78,3 +78,120 @@ func TestCollisionResolverControlsSelection(t *testing.T) {
 		t.Fatalf("unexpected results: %#v", results)
 	}
 }
+
+func TestRendererCreationErrors(t *testing.T) {
+	engine, err := libtemplate.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Nil engine
+	if _, err := tree.New(nil); err == nil {
+		t.Fatal("expected error for nil engine")
+	}
+
+	// No sources
+	if _, err := tree.New(engine); err == nil {
+		t.Fatal("expected error for no sources")
+	}
+
+	// Source with nil FS
+	if _, err := tree.New(engine, tree.WithSources(tree.Source{FS: nil})); err == nil {
+		t.Fatal("expected error for nil source FS")
+	}
+}
+
+func TestRendererOptions(t *testing.T) {
+	engine, err := libtemplate.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	renderer, err := tree.New(
+		engine,
+		tree.WithSources(tree.Source{
+			Name: "test-src",
+			FS: fstest.MapFS{
+				"file1.custom": {Data: []byte("val1")},
+				"skip-me.txt":  {Data: []byte("skipped")},
+			},
+		}),
+		tree.WithTemplateMatcher(tree.Suffix(".custom")),
+		tree.WithPredicate(func(e tree.Entry) bool {
+			return e.Path != "skip-me.txt"
+		}),
+		tree.WithPathFunc(func(e tree.Entry) (string, error) {
+			return "out/" + e.Path, nil
+		}),
+		tree.WithCollisionPolicy(tree.CollisionPreferLast),
+	)
+	if err != nil {
+		t.Fatalf("New renderer failed: %v", err)
+	}
+
+	results, err := renderer.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != "out/file1.custom" {
+		t.Fatalf("unexpected results: %#v", results)
+	}
+}
+
+func TestCollisionPolicies(t *testing.T) {
+	engine, _ := libtemplate.New()
+	fs := fstest.MapFS{
+		"a.txt": {Data: []byte("first")},
+		"b.txt": {Data: []byte("second")},
+	}
+
+	// CollisionPreferFirst
+	rendererKeepFirst, err := tree.New(
+		engine,
+		tree.WithSources(tree.Source{FS: fs}),
+		tree.WithKeyFunc(func(tree.Entry) (string, error) { return "target", nil }),
+		tree.WithCollisionPolicy(tree.CollisionPreferFirst),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resKeepFirst, err := rendererKeepFirst.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resKeepFirst) != 1 || string(resKeepFirst[0].Content) != "first" {
+		t.Fatalf("expected 'first', got %q", string(resKeepFirst[0].Content))
+	}
+
+	// CollisionPreferLast
+	rendererReplace, err := tree.New(
+		engine,
+		tree.WithSources(tree.Source{FS: fs}),
+		tree.WithKeyFunc(func(tree.Entry) (string, error) { return "target", nil }),
+		tree.WithCollisionPolicy(tree.CollisionPreferLast),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resReplace, err := rendererReplace.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resReplace) != 1 || string(resReplace[0].Content) != "second" {
+		t.Fatalf("expected 'second', got %q", string(resReplace[0].Content))
+	}
+
+	// CollisionError
+	rendererError, err := tree.New(
+		engine,
+		tree.WithSources(tree.Source{FS: fs}),
+		tree.WithKeyFunc(func(tree.Entry) (string, error) { return "target", nil }),
+		tree.WithCollisionPolicy(tree.CollisionError),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rendererError.Render(context.Background(), nil); err == nil {
+		t.Fatal("expected collision error")
+	}
+}
