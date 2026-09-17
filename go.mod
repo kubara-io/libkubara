@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/Masterminds/sprig/v3 v3.3.0
-	go.yaml.in/yaml/v3 v3.0.4
+	go.yaml.in/yaml/v3 v3.0.5
 	k8s.io/apiextensions-apiserver v0.34.10
 	k8s.io/apimachinery v0.34.10
 	k8s.io/apiserver v0.34.10
