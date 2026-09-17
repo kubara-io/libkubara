@@ -1,210 +1,143 @@
-# libkubara (proof of concept)
+# libkubara
 
-`libkubara` explores reusable building blocks extracted from Kubara's rendering
-and local CustomResourceDefinition validation logic.
+In-process Kubernetes CRD validation, structural defaulting, and manifest handling without a running cluster.
 
-> **Status:** This repository is under active development. Its APIs are still
-> proof-of-concept and may change. Do not use it as a stable rollout validation
-> boundary yet.
+Validating Kubernetes Custom Resources usually requires a full running cluster. Developers often set up `envtest`, spin up local kind or minikube clusters, or maintain duplicate Go structs and JSON Schemas that drift from the real CRD definition.
 
-## Core model
+The Kubernetes API servers code is open and already provides the validation engine: OpenAPI v3 structural schemas, structural pruning, field defaulting, list and map set validation, and Common Expression Language (CEL) rules (`x-kubernetes-validations`). However, using `k8s.io/apiextensions-apiserver` and `k8s.io/apimachinery` directly as a library can be a real struggle and requires wiring a lot of internal logic: schema compilers, managing raw unstructured conversions, and handling verbose internal APIs.
 
-A consumer's configuration is a **Kubernetes Custom Resource**, not a Go config
-struct with a separately generated JSON Schema.
+`libkubara` does not re-implement Kubernetes validation logic. Instead, it embeds and wraps the official upstream `k8s.io` packages behind a more consumer friendly interface. You get the exact same validation, defaulting, and CEL evaluation that runs inside the Kubernetes API server, accessible directly in your code in milliseconds with zero external dependencies, no etcd, and no container runtimes.
 
-The CRD is the single source of truth for:
+## Quick start
 
-- config shape and required properties
-- defaults
-- OpenAPI constraints
-- Kubernetes list/map semantics
-- `x-kubernetes-validations` CEL rules
-- create/update transition rules
-- IDE schema integration in future tooling
-
-This allows a GitOps repository to validate and normalize proposed Custom
-Resources without a Kubernetes runtime before committing or rolling them out.
-
-```text
-project-crd.yaml       schema, defaults, and CEL policy
-project-config.yaml    current Project custom resource
-project-update.yaml    proposed GitOps change
-          │
-          ▼
- decode CRD → compile local validator → decode config resource
-          │
-          ├─ ValidateCreate(config)
-          ├─ ValidateTransition(proposed, current)
-          └─ normalized/defaulted resource → template context
-```
-
-The module currently targets **Go 1.24** and pins Kubernetes libraries to the
-**v0.34.x / Kubernetes 1.34** API baseline. An importing project may select a
-newer compatible Kubernetes module through Go minimal version selection.
-
-## Packages
-
-| Package | PoC purpose |
-|---|---|
-| `manifest` | Decode Kubernetes-style YAML/JSON streams into dependency-neutral `manifest.Object` facades. |
-| `crdvalidate` | Decode opaque CRD definitions, then normalize and validate Custom Resource creates and transitions locally. |
-| `kubernetes` | Optional interoperability for consumers that intentionally use typed Kubernetes CRD or Unstructured values. |
-| `template` | Render one `text/template` with hermetic Sprig, YAML helpers, strict missing keys, cancellation, and an output limit. |
-| `template/tree` | Discover ordered `fs.FS` sources, resolve collisions, render `.tplt` files, and copy static files. `RenderAll` retains per-file errors for compatibility adapters. |
-| `diagnostic` | Initial shared diagnostic values; not integrated across every PoC package yet. |
-
-## Importing-project example
-
-[`examples/consumer`](examples/consumer) is a separate Go module demonstrating
-the intended external call structure. It contains:
-
-- [`project-crd.yaml`](examples/consumer/project-crd.yaml)
-- [`project-config.yaml`](examples/consumer/project-config.yaml)
-- [`project-config-update.yaml`](examples/consumer/project-config-update.yaml)
-
-The normal consumer imports no `k8s.io` packages.
-
-Run it with:
-
-```bash
-cd examples/consumer
-go run .
-```
-
-Expected output:
-
-```text
-CRD create: platforms/storefront stage=dev replicas=1
-generated/project.txt: Project storefront runs in dev with 1 replica(s)
-generated/static.txt: copied unchanged
-```
-
-## Operator types & prevalidation example
-
-[`examples/cert-manager`](examples/cert-manager) demonstrates consuming an existing operator CRD (cert-manager `Issuer`), prevalidating custom resources locally in a CLI without a running Kubernetes apiserver, and parsing the normalized/defaulted output into kubebuilder-generated Go types (`certmanagerv1.Issuer`):
-
-- [`issuer-crd.yaml`](examples/cert-manager/issuer-crd.yaml)
-- [`issuer-valid.yaml`](examples/cert-manager/issuer-valid.yaml)
-- [`issuer-invalid.yaml`](examples/cert-manager/issuer-invalid.yaml)
-
-Run it with:
-
-```bash
-cd examples/cert-manager
-go run .
-```
-
-Expected output:
-
-```text
-=== Scenario 1: Prevalidate valid Issuer & parse into certmanagerv1.Issuer ===
-Validated CR: default/letsencrypt-staging
-ACME Server: https://acme-staging-v02.api.letsencrypt.org/directory
-ACME Email: user@example.com
-ACME Secret: letsencrypt-staging-key (key: tls.key)
-Solvers count: 1
-
-=== Scenario 2: Prevalidate invalid Issuer (missing required fields) ===
-Local validation error caught:
-validate CR: spec.acme.server: spec.acme.server: Required value
-spec.acme.privateKeySecretRef: spec.acme.privateKeySecretRef: Required value
-```
-
-## Consumer call structure
+Validate a Custom Resource against an operator CRD (e.g.: cert-manager `Issuer`) and parse the defaulted output directly into a typed struct:
 
 ```go
-// Load the schema directly from the CRD YAML kept in the repository.
-validator, err := crdvalidate.Compile(crdReader)
+package main
 
-// Load the configuration as a Kubernetes Custom Resource.
-current, err := manifest.DecodeOne(configReader)
-created := validator.ValidateCreate(ctx, current, crdvalidate.RejectUnknown)
-if err := created.Err(); err != nil {
-    return err
+import (
+    "bytes"
+    "context"
+    _ "embed"
+    "fmt"
+    "log"
+
+    certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+    "github.com/kubara-io/libkubara/crdvalidate"
+    "github.com/kubara-io/libkubara/manifest"
+)
+
+//go:embed issuer-crd.yaml
+var issuerCRD []byte
+
+//go:embed issuer.yaml
+var issuerYAML []byte
+
+func main() {
+    ctx := context.Background()
+
+    // Compile schema and CEL rules directly from CRD YAML
+    validator, err := crdvalidate.Compile(bytes.NewReader(issuerCRD))
+    if err != nil {
+        log.Fatalf("compile CRD: %v", err)
+    }
+
+    // Decode the input manifest
+    rawObj, err := manifest.DecodeOneBytes(issuerYAML)
+    if err != nil {
+        log.Fatalf("decode manifest: %v", err)
+    }
+
+    // Run structural schema validation, defaulting, and CEL rules
+    result := validator.ValidateCreate(ctx, rawObj, crdvalidate.RejectUnknown)
+
+    // Unmarshal the defaulted and validated object into a typed struct
+    var issuer certmanagerv1.Issuer
+    if err := result.Into(&issuer); err != nil {
+        log.Fatalf("validation failed:\n%v", err)
+    }
+
+    fmt.Printf("Validated Issuer: %s/%s\n", issuer.Namespace, issuer.Name)
+    fmt.Printf("ACME Server: %s\n", issuer.Spec.ACME.Server)
 }
+```
 
-// Validate a proposed GitOps change locally when the old object is available.
-proposed, err := manifest.DecodeOne(updateReader)
-updated := validator.ValidateTransition(ctx, proposed, created.Object, crdvalidate.RejectUnknown)
-if err := updated.Err(); err != nil {
-    return err
+## Key capabilities
+
+### 1. In-process validation without a cluster
+- Directly executes upstream `k8s.io/apiextensions-apiserver` structural schema compilation and defaulting logic.
+- Evaluates `x-kubernetes-validations` CEL rules using the upstream CEL runtime with standard API server cost limits.
+- Matches production `kube-apiserver` validation behavior without mocking or custom schema approximations.
+- Supports strict rejection of undeclared fields via `crdvalidate.RejectUnknown`.
+
+### 2. GitOps lifecycle transitions
+`ValidateTransition` allows GitOps pipelines and CLI tools to validate proposed changes against current resources when API-server-assigned metadata like `metadata.resourceVersion` is absent:
+
+```go
+// Validate an update from current state to proposed state
+result := validator.ValidateTransition(ctx, proposedObj, currentObj, crdvalidate.RejectUnknown)
+if err := result.Err(); err != nil {
+    return fmt.Errorf("proposed change rejected: %w", err)
 }
+```
 
-// Render from a detached copy of the validated/defaulted resource.
+### 3. Clean manifest abstractions
+- `manifest.Decode` and `manifest.DecodeOne` parse multi-document YAML or JSON streams from `io.Reader`, `[]byte`, or `string`.
+- Implements `json.Marshaler` and `yaml.Marshaler`, with `.JSON()` and `.YAML()` methods for serialization.
+- Provides standard metadata and nested field accessors: `Labels()`, `Annotations()`, `NestedString()`, `NestedInt64()`, `NestedBool()`, `NestedSlice()`, and `NestedMap()`.
+- Unmarshals into any target struct using `.Into(&target)`.
+
+### 4. Hermetic file-tree generation
+The `template` and `template/tree` packages provide a pipeline for tools that generate configuration files or manifests from validated custom resources:
+
+- Hermetic Sprig functions by default. Non-deterministic functions like environment variables, clocks, or random numbers require explicit opt-in.
+- Strict missing-key checking by default.
+- Default 16 MiB output limit per template to protect memory.
+- In-memory tree rendering across multiple `fs.FS` sources with configurable file matchers and collision policies.
+
+```go
 dataBuilder := template.NewData()
-_ = dataBuilder.Namespace("config", created.Object.Data())
+_ = dataBuilder.Namespace("config", result.Object)
 data, _ := dataBuilder.Build()
 
 engine, _ := template.New(template.WithMissingKeyError())
 renderer, _ := tree.New(engine,
-    tree.WithSources(tree.Source{Name: "base", FS: sourceFS}),
+    tree.WithSources(tree.Source{Name: "templates", FS: templateFS}),
 )
-results, err := renderer.Render(ctx, data)
+renderedFiles, err := renderer.Render(ctx, data)
 ```
 
-`ValidateTransition` is intended for old/proposed GitOps resources that omit
-API-server-managed `metadata.resourceVersion`. `ValidateUpdate` retains stricter
-API-style update metadata behavior.
+## Packages
 
-## Kubernetes dependency isolation
+| Package | Purpose |
+|---|---|
+| `manifest` | Decode, manipulate, and serialize Kubernetes manifests without requiring apiserver dependencies. |
+| `crdvalidate` | Drive upstream API server schema validation, defaulting, and GitOps transitions locally. |
+| `kubernetes` | Adapters for codebases that already work with `apiextensionsv1` or `unstructured.Unstructured`. |
+| `diagnostic` | Structured diagnostic list and severity reporting for validation failures. |
+| `template` | Single template execution with hermetic Sprig, strict missing keys, and output limits. |
+| `template/tree` | Multi-source `fs.FS` template and static file discovery, collision handling, and rendering. |
 
-The normal public workflow exposes `crdvalidate.Definition`, `manifest.Object`,
-and `diagnostic.List`; it does not expose `apiextensionsv1`, `unstructured`, or
-`field.ErrorList`. Consumers that already use Kubernetes types may explicitly
-opt into the adapter:
+## Examples
 
-```go
-import kubeadapter "github.com/kubara-io/libkubara/kubernetes"
+- [`examples/cert-manager`](examples/cert-manager): Compiling a third-party operator CRD and validating manifests into kubebuilder-generated Go types.
+- [`examples/consumer`](examples/consumer): Validating a custom resource lifecycle and rendering a template tree.
 
-definition, err := kubeadapter.Definition(typedCRD)
-object, err := kubeadapter.Object(typedUnstructured)
-typedCopy := kubeadapter.Unstructured(object)
+Run them locally:
+
+```bash
+cd examples/cert-manager && go run .
+cd examples/consumer && go run .
 ```
 
-This facade reduces source/API coupling and keeps ordinary consumer code clear
-of Kubernetes dependencies. It does **not** create binary-level isolation: the
-validator still uses Kubernetes modules internally, and Go minimal version
-selection chooses one version for the final process. Libkubara therefore still
-needs a documented supported range and CI against both its minimum dependency
-and Kubara's selected version. Complete version isolation would require a
-separate validation process or service.
+## Contributing
 
-## Determinism and safety defaults
-
-- Hermetic Sprig is enabled by default. Environment, clock, random, UUID, and
-  DNS functions require explicit `template.WithFullSprig()` opt-in.
-- Missing template map keys fail by default.
-- Templates have a default 16 MiB output limit.
-- Tree rendering returns data and does not write to the host filesystem.
-- Manifest decoding requires no REST client or Kubernetes runtime.
-- CRD validation works on a deep copy and returns the normalized object.
-- `RejectUnknown` makes locally pruned fields fail validation instead of being
-  silently lost during a rollout.
-
-These APIs are not a security sandbox. Templates and schemas should still be
-treated as trusted input during this PoC.
-
-## What deliberately remains in Kubara
-
-The library does not define Kubara's catalog or platform policy:
-
-- OCI catalog pulling, caching, and precedence
-- `.cluster`, `.env`, `.catalog`, and `.spokes` context conventions
-- Helm/Terraform provider selection
-- `platform-components` and `platform-configs`
-- enabled-service filtering and per-cluster output layout
-- Kubara-specific migration and provider policy
-
-Kubara's own future config can become a Kubara Custom Resource and use the same
-manifest/CRD validation pipeline before Kubara builds its rendering context.
-
-## Development
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and testing instructions.
 
 ```bash
 make check
 ```
 
-Run `make help` to list individual test, formatting, dependency, and vetting
-targets.
+## Background
 
-This repository was created as a local PoC and has not been published or tagged.
+`libkubara` originated from the manifest validation and template rendering core of [Kubara](https://github.com/kubara-io/kubara). It was extracted to provide a standalone library for any CLI, operator, testing suite, or GitOps workflow that needs Kubernetes schema validation without a running cluster.
