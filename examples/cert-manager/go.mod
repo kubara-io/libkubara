@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/cert-manager/cert-manager v1.17.1
-	github.com/kubara-io/libkubara v0.0.0
+	github.com/kubara-io/libkubara v0.1.1
 )
 
 require (

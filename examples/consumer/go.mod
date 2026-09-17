@@ -2,7 +2,7 @@ module example.com/libkubara-consumer
 
 go 1.24.0
 
-require github.com/kubara-io/libkubara v0.0.0
+require github.com/kubara-io/libkubara v0.1.1
 
 require (
 	cel.dev/expr v0.24.0 // indirect
