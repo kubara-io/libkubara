@@ -1,14 +1,17 @@
 package manifest
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	k8syaml "sigs.k8s.io/yaml"
 )
 
 type Object struct {
@@ -45,10 +48,50 @@ func (o *Object) Data() map[string]any {
 	return runtime.DeepCopyJSON(o.data)
 }
 
-func (o *Object) APIVersion() string { return o.stringField("apiVersion") }
-func (o *Object) Kind() string       { return o.stringField("kind") }
-func (o *Object) Name() string       { return o.nestedString("metadata", "name") }
-func (o *Object) Namespace() string  { return o.nestedString("metadata", "namespace") }
+func (o *Object) Into(target any) error {
+	if o == nil {
+		return fmt.Errorf("manifest object is nil")
+	}
+	if target == nil {
+		return fmt.Errorf("target is nil")
+	}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(o.data, target); err != nil {
+		return fmt.Errorf("convert manifest object: %w", err)
+	}
+	return nil
+}
+
+func (o *Object) MarshalJSON() ([]byte, error) {
+	if o == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(o.data)
+}
+
+func (o *Object) MarshalYAML() (any, error) {
+	if o == nil {
+		return nil, nil
+	}
+	return o.data, nil
+}
+
+func (o *Object) JSON() ([]byte, error) {
+	return o.MarshalJSON()
+}
+
+func (o *Object) YAML() ([]byte, error) {
+	if o == nil {
+		return []byte("null\n"), nil
+	}
+	return k8syaml.Marshal(o.data)
+}
+
+func (o *Object) APIVersion() string             { return o.stringField("apiVersion") }
+func (o *Object) Kind() string                   { return o.stringField("kind") }
+func (o *Object) Name() string                   { return o.nestedString("metadata", "name") }
+func (o *Object) Namespace() string              { return o.nestedString("metadata", "namespace") }
+func (o *Object) Labels() map[string]string      { return o.metadataStringMap("labels") }
+func (o *Object) Annotations() map[string]string { return o.metadataStringMap("annotations") }
 
 func (o *Object) NestedString(fields ...string) (string, bool, error) {
 	if o == nil {
@@ -64,6 +107,27 @@ func (o *Object) NestedInt64(fields ...string) (int64, bool, error) {
 	return unstructured.NestedInt64(o.data, fields...)
 }
 
+func (o *Object) NestedBool(fields ...string) (bool, bool, error) {
+	if o == nil {
+		return false, false, nil
+	}
+	return unstructured.NestedBool(o.data, fields...)
+}
+
+func (o *Object) NestedSlice(fields ...string) ([]any, bool, error) {
+	if o == nil {
+		return nil, false, nil
+	}
+	return unstructured.NestedSlice(o.data, fields...)
+}
+
+func (o *Object) NestedMap(fields ...string) (map[string]any, bool, error) {
+	if o == nil {
+		return nil, false, nil
+	}
+	return unstructured.NestedMap(o.data, fields...)
+}
+
 func (o *Object) stringField(field string) string {
 	if o == nil {
 		return ""
@@ -75,6 +139,14 @@ func (o *Object) stringField(field string) string {
 func (o *Object) nestedString(fields ...string) string {
 	value, _, _ := o.NestedString(fields...)
 	return value
+}
+
+func (o *Object) metadataStringMap(field string) map[string]string {
+	if o == nil {
+		return nil
+	}
+	m, _, _ := unstructured.NestedStringMap(o.data, "metadata", field)
+	return m
 }
 
 func Decode(reader io.Reader) ([]*Object, error) {
@@ -113,6 +185,14 @@ func Decode(reader io.Reader) ([]*Object, error) {
 	return objects, nil
 }
 
+func DecodeBytes(data []byte) ([]*Object, error) {
+	return Decode(bytes.NewReader(data))
+}
+
+func DecodeString(s string) ([]*Object, error) {
+	return Decode(strings.NewReader(s))
+}
+
 func DecodeOne(reader io.Reader) (*Object, error) {
 	objects, err := Decode(reader)
 	if err != nil {
@@ -122,4 +202,12 @@ func DecodeOne(reader io.Reader) (*Object, error) {
 		return nil, fmt.Errorf("expected exactly one manifest object, got %d", len(objects))
 	}
 	return objects[0], nil
+}
+
+func DecodeOneBytes(data []byte) (*Object, error) {
+	return DecodeOne(bytes.NewReader(data))
+}
+
+func DecodeOneString(s string) (*Object, error) {
+	return DecodeOne(strings.NewReader(s))
 }

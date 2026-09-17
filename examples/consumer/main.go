@@ -25,10 +25,9 @@ var projectConfigUpdateYAML []byte
 func main() {
 	ctx := context.Background()
 
-	definition, _ := crdvalidate.DecodeCRD(bytes.NewReader(projectCRDYAML))
-	validator, _ := crdvalidate.Compile(definition)
+	validator, _ := crdvalidate.Compile(bytes.NewReader(projectCRDYAML))
 
-	current, _ := manifest.DecodeOne(bytes.NewReader(projectConfigYAML))
+	current, _ := manifest.DecodeOneBytes(projectConfigYAML)
 	config := validator.ValidateCreate(ctx, current, crdvalidate.RejectUnknown)
 	fmt.Printf("CRD create: %s/%s stage=%s replicas=%d\n",
 		config.Object.Namespace(),
@@ -38,7 +37,7 @@ func main() {
 	)
 
 	dataBuilder := libtemplate.NewData()
-	dataBuilder.Namespace("config", config.Object.Data())
+	dataBuilder.Namespace("config", config.Object)
 	data, _ := dataBuilder.Build()
 
 	engine, _ := libtemplate.New(
@@ -64,10 +63,10 @@ func main() {
 }
 
 func validateConfigLifecycle(ctx context.Context, definition *crdvalidate.Definition) *manifest.Object {
-	validator, err := crdvalidate.Compile(definition)
+	validator, err := definition.Compile()
 	check(err)
 
-	current, err := manifest.DecodeOne(bytes.NewReader(projectConfigYAML))
+	current, err := manifest.DecodeOneBytes(projectConfigYAML)
 	check(err)
 	created := validator.ValidateCreate(ctx, current, crdvalidate.RejectUnknown)
 	check(created.Err())
@@ -78,7 +77,7 @@ func validateConfigLifecycle(ctx context.Context, definition *crdvalidate.Defini
 		mustNestedInt64(created.Object, "spec", "replicas"),
 	)
 
-	proposed, err := manifest.DecodeOne(bytes.NewReader(projectConfigUpdateYAML))
+	proposed, err := manifest.DecodeOneBytes(projectConfigUpdateYAML)
 	check(err)
 	updated := validator.ValidateTransition(ctx, proposed, created.Object, crdvalidate.RejectUnknown)
 	check(updated.Err())

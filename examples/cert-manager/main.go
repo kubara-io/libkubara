@@ -9,7 +9,6 @@ import (
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	"github.com/kubara-io/libkubara/crdvalidate"
 	"github.com/kubara-io/libkubara/manifest"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 //go:embed issuer-crd.yaml
@@ -46,27 +45,20 @@ func main() {
 }
 
 func loadValidator(crdBytes []byte) (*crdvalidate.Validator, error) {
-	definition, err := crdvalidate.DecodeCRD(bytes.NewReader(crdBytes))
-	if err != nil {
-		return nil, fmt.Errorf("decode CRD: %w", err)
-	}
-	return crdvalidate.Compile(definition)
+	return crdvalidate.Compile(bytes.NewReader(crdBytes))
 }
 
 func validateAndParseIssuer(ctx context.Context, validator *crdvalidate.Validator, crYAML []byte) (*certmanagerv1.Issuer, error) {
-	rawObj, err := manifest.DecodeOne(bytes.NewReader(crYAML))
+	rawObj, err := manifest.DecodeOneBytes(crYAML)
 	if err != nil {
 		return nil, fmt.Errorf("decode manifest: %w", err)
 	}
 
 	result := validator.ValidateCreate(ctx, rawObj, crdvalidate.RejectUnknown)
-	if err := result.Err(); err != nil {
-		return nil, fmt.Errorf("validate CR: %w", err)
-	}
 
 	var issuer certmanagerv1.Issuer
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(result.Object.Data(), &issuer); err != nil {
-		return nil, fmt.Errorf("convert to typed Issuer: %w", err)
+	if err := result.Into(&issuer); err != nil {
+		return nil, fmt.Errorf("validate CR: %w", err)
 	}
 
 	return &issuer, nil

@@ -1,8 +1,10 @@
 package crdvalidate
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/kubara-io/libkubara/manifest"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -32,6 +34,14 @@ func DecodeCRD(reader io.Reader) (*Definition, error) {
 		return nil, fmt.Errorf("decode CRD manifest: %w", err)
 	}
 	return NewDefinition(object)
+}
+
+func DecodeCRDBytes(data []byte) (*Definition, error) {
+	return DecodeCRD(bytes.NewReader(data))
+}
+
+func DecodeCRDString(s string) (*Definition, error) {
+	return DecodeCRD(strings.NewReader(s))
 }
 
 func (d *Definition) typed() (*apiextensionsv1.CustomResourceDefinition, error) {

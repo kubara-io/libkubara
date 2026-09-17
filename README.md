@@ -114,8 +114,7 @@ spec.acme.privateKeySecretRef: spec.acme.privateKeySecretRef: Required value
 
 ```go
 // Load the schema directly from the CRD YAML kept in the repository.
-crd, err := crdvalidate.DecodeCRD(crdReader)
-validator, err := crdvalidate.Compile(crd)
+validator, err := crdvalidate.Compile(crdReader)
 
 // Load the configuration as a Kubernetes Custom Resource.
 current, err := manifest.DecodeOne(configReader)

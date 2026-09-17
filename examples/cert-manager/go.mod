@@ -5,7 +5,6 @@ go 1.24.0
 require (
 	github.com/cert-manager/cert-manager v1.17.1
 	github.com/kubara-io/libkubara v0.0.0
-	k8s.io/apimachinery v0.34.10
 )
 
 require (
@@ -53,6 +52,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/api v0.34.10 // indirect
 	k8s.io/apiextensions-apiserver v0.34.10 // indirect
+	k8s.io/apimachinery v0.34.10 // indirect
 	k8s.io/apiserver v0.34.10 // indirect
 	k8s.io/component-base v0.34.10 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect

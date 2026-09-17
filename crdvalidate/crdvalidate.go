@@ -3,6 +3,7 @@ package crdvalidate
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 
 	"github.com/kubara-io/libkubara/diagnostic"
@@ -53,8 +54,29 @@ type Result struct {
 func (r Result) Valid() bool { return !r.Diagnostics.HasErrors() }
 func (r Result) Err() error  { return r.Diagnostics.Err() }
 
-func Compile(definition *Definition) (*Validator, error) {
-	crd, err := definition.typed()
+func (r Result) Into(target any) error {
+	if err := r.Err(); err != nil {
+		return err
+	}
+	if r.Object == nil {
+		return fmt.Errorf("validated object is nil")
+	}
+	return r.Object.Into(target)
+}
+
+func Compile(reader io.Reader) (*Validator, error) {
+	definition, err := DecodeCRD(reader)
+	if err != nil {
+		return nil, err
+	}
+	return definition.Compile()
+}
+
+func (d *Definition) Compile() (*Validator, error) {
+	if d == nil {
+		return nil, fmt.Errorf("CRD definition is nil")
+	}
+	crd, err := d.typed()
 	if err != nil {
 		return nil, err
 	}
