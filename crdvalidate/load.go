@@ -11,10 +11,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// Definition represents an uncompiled CustomResourceDefinition manifest.
 type Definition struct {
 	object *manifest.Object
 }
 
+// NewDefinition creates a new Definition from a manifest Object, verifying that its
+// apiVersion is apiextensions.k8s.io/v1 and kind is CustomResourceDefinition.
 func NewDefinition(object *manifest.Object) (*Definition, error) {
 	if object == nil {
 		return nil, fmt.Errorf("CRD object is nil")
@@ -28,6 +31,7 @@ func NewDefinition(object *manifest.Object) (*Definition, error) {
 	return &Definition{object: object}, nil
 }
 
+// DecodeCRD decodes a single CustomResourceDefinition document from the reader.
 func DecodeCRD(reader io.Reader) (*Definition, error) {
 	object, err := manifest.DecodeOne(reader)
 	if err != nil {
@@ -36,10 +40,12 @@ func DecodeCRD(reader io.Reader) (*Definition, error) {
 	return NewDefinition(object)
 }
 
+// DecodeCRDBytes decodes a single CustomResourceDefinition document from byte slice data.
 func DecodeCRDBytes(data []byte) (*Definition, error) {
 	return DecodeCRD(bytes.NewReader(data))
 }
 
+// DecodeCRDString decodes a single CustomResourceDefinition document from a string.
 func DecodeCRDString(s string) (*Definition, error) {
 	return DecodeCRD(strings.NewReader(s))
 }

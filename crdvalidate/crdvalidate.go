@@ -1,3 +1,65 @@
+// Package crdvalidate compiles Kubernetes CustomResourceDefinitions and performs local,
+// in-process validation, defaulting, structural pruning, and CEL rule evaluation on
+// custom resources with full upstream Kubernetes API server parity.
+//
+// # Overview
+//
+// CustomResourceDefinitions (CRDs) define the schema contract for Kubernetes custom
+// resources. Evaluating custom resources outside a cluster normally requires running
+// an API server with etcd.
+//
+// crdvalidate runs the official upstream Kubernetes validation engine
+// (k8s.io/apiextensions-apiserver and k8s.io/apiserver) in-process. It executes the same
+// schema validation, defaulting, and CEL rules as kube-apiserver, with no cluster,
+// etcd, or container runtime required.
+//
+// # Validation Pipeline
+//
+// When validating a custom resource, crdvalidate runs the full API server admission pipeline:
+//  1. Group, Kind, and API Version matching against served versions in the CRD.
+//  2. Structural pruning of unknown fields (either rejected or tracked via [UnknownFieldMode]).
+//  3. Structural field defaulting and pruning of non-nullable nulls without defaults.
+//  4. Metadata accessor validation (DNS subdomain name rules, namespace scope rules).
+//  5. OpenAPI v3 schema validation (required fields, regex patterns, formats, ranges).
+//  6. List set and map set key uniqueness validation.
+//  7. Common Expression Language (CEL) validation rules declared in x-kubernetes-validations,
+//     evaluated with standard API server per-call cost budgets.
+//
+// # Validation Lifecycle
+//
+// Three validation methods support different stages of resource lifecycles:
+//   - [Validator.ValidateCreate]: Validates a new custom resource creation.
+//   - [Validator.ValidateUpdate]: Validates an update against an existing resource. Both
+//     objects must specify metadata.resourceVersion, matching strict API server update requirements.
+//   - [Validator.ValidateTransition]: Validates proposed changes in GitOps or CLI workflows
+//     where metadata.resourceVersion is omitted.
+//
+// # Example
+//
+//	validator, err := crdvalidate.Compile(bytes.NewReader(crdYAML))
+//	if err != nil {
+//		return err
+//	}
+//
+//	rawObj, err := manifest.DecodeOneBytes(crYAML)
+//	if err != nil {
+//		return err
+//	}
+//
+//	result := validator.ValidateCreate(ctx, rawObj, crdvalidate.RejectUnknown)
+//	if err := result.Err(); err != nil {
+//		return fmt.Errorf("invalid CR: %w", err)
+//	}
+//
+//	// Unmarshal the defaulted and validated resource directly into a typed struct:
+//	var issuer certmanagerv1.Issuer
+//	if err := result.Into(&issuer); err != nil {
+//		return err
+//	}
+//
+// # Concurrency
+//
+// A compiled [Validator] is immutable and safe for concurrent use by multiple goroutines.
 package crdvalidate
 
 import (
@@ -23,15 +85,18 @@ import (
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 )
 
+// UnknownFieldMode specifies how unknown or undeclared fields in a custom resource are handled.
 type UnknownFieldMode int
 
 const (
-	// PruneUnknown matches the API server's persisted-object behavior.
+	// PruneUnknown silently prunes undeclared fields, matching the API server's storage behavior.
 	PruneUnknown UnknownFieldMode = iota
-	// RejectUnknown reports every pruned path as a validation error.
+	// RejectUnknown reports every pruned or undeclared field path as a validation error.
 	RejectUnknown
 )
 
+// Validator executes in-process schema validation, defaulting, and CEL rule checks
+// for custom resources of a compiled CustomResourceDefinition.
 type Validator struct {
 	group      string
 	kind       string
@@ -45,15 +110,39 @@ type versionValidator struct {
 	cel        *cel.Validator
 }
 
+// Result holds the outcome of a validation operation, including the normalized
+// object (with schema defaults applied and unknown fields pruned), any diagnostics,
+// and paths pruned during validation.
 type Result struct {
-	Object      *manifest.Object
+	// Object is the validated, defaulted, and pruned manifest object.
+	Object *manifest.Object
+	// Diagnostics contains any validation errors or warnings.
 	Diagnostics diagnostic.List
+	// PrunedPaths lists the field paths that were pruned from the object.
 	PrunedPaths []string
 }
 
+// Valid returns true if the validation result contains no errors.
 func (r Result) Valid() bool { return !r.Diagnostics.HasErrors() }
-func (r Result) Err() error  { return r.Diagnostics.Err() }
 
+// Err returns the combined error list if validation failed, or nil if valid.
+func (r Result) Err() error { return r.Diagnostics.Err() }
+
+// Into unmarshals the validated, defaulted, and pruned object into target.
+//
+// Target must be a non-nil pointer to a Go struct or map. If validation produced
+// any diagnostic errors (that is, r.Valid() is false), Into returns r.Err()
+// immediately without modifying target.
+//
+// Example:
+//
+//	var issuer certmanagerv1.Issuer
+//	if err := result.Into(&issuer); err != nil {
+//		return fmt.Errorf("invalid issuer: %w", err)
+//	}
+//
+// It returns an error if validation failed, if target is nil or not a pointer,
+// or if unmarshaling fails.
 func (r Result) Into(target any) error {
 	if err := r.Err(); err != nil {
 		return err
@@ -64,6 +153,20 @@ func (r Result) Into(target any) error {
 	return r.Object.Into(target)
 }
 
+// Compile decodes a CustomResourceDefinition from reader and compiles its OpenAPI v3
+// structural schemas, field defaulting trees, list and map constraints, and CEL
+// validation rules into a reusable, thread-safe Validator.
+//
+// Example:
+//
+//	validator, err := crdvalidate.Compile(bytes.NewReader(crdBytes))
+//	if err != nil {
+//		log.Fatalf("failed to compile CRD: %v", err)
+//	}
+//
+// It returns an error if the reader contains invalid YAML/JSON, does not represent
+// an apiextensions.k8s.io/v1 CustomResourceDefinition, or contains no served versions
+// with an OpenAPI schema.
 func Compile(reader io.Reader) (*Validator, error) {
 	definition, err := DecodeCRD(reader)
 	if err != nil {
@@ -72,6 +175,10 @@ func Compile(reader io.Reader) (*Validator, error) {
 	return definition.Compile()
 }
 
+// Compile compiles the Definition's OpenAPI v3 structural schemas, defaulting trees,
+// and CEL rules into a reusable, thread-safe Validator.
+//
+// It returns an error if d is nil, or if schema compilation fails.
 func (d *Definition) Compile() (*Validator, error) {
 	if d == nil {
 		return nil, fmt.Errorf("CRD definition is nil")
@@ -119,14 +226,38 @@ func (d *Definition) Compile() (*Validator, error) {
 	return compiled, nil
 }
 
+// ValidateCreate validates a new custom resource creation against the CRD's structural schema.
+//
+// The validation process:
+//   - Verifies kind, group, and served API version match the CRD definition.
+//   - Prunes undeclared fields according to mode ([PruneUnknown] or [RejectUnknown]).
+//   - Applies schema field defaults and strips non-nullable nulls without defaults.
+//   - Validates metadata (name DNS subdomain format, namespace presence matching scope).
+//   - Validates OpenAPI schema constraints (required fields, patterns, ranges).
+//   - Validates list set and map set key uniqueness.
+//   - Evaluates CEL validation rules with API server per-call cost budgets.
+//
+// If ctx is nil, context.Background() is used.
 func (v *Validator) ValidateCreate(ctx context.Context, object *manifest.Object, mode UnknownFieldMode) Result {
 	return v.validate(ctx, toUnstructured(object), nil, mode).publicResult()
 }
 
+// ValidateUpdate validates an update from oldObject to object against schema update rules,
+// immutable field constraints, and transition CEL rules.
+//
+// Both object and oldObject must specify metadata.resourceVersion, matching the strict
+// behavior of kube-apiserver update admission. For GitOps workflows where resourceVersion
+// is omitted, use [Validator.ValidateTransition] instead.
 func (v *Validator) ValidateUpdate(ctx context.Context, object, oldObject *manifest.Object, mode UnknownFieldMode) Result {
 	return v.validate(ctx, toUnstructured(object), toUnstructured(oldObject), mode).publicResult()
 }
 
+// ValidateTransition validates an update between two resources where metadata.resourceVersion
+// may be omitted, such as when comparing GitOps proposed changes against stored resources.
+//
+// If neither resource specifies a resourceVersion, ValidateTransition assigns temporary
+// version markers to satisfy apiserver update checks, runs full transition validation,
+// and clears the markers before returning.
 func (v *Validator) ValidateTransition(ctx context.Context, object, oldObject *manifest.Object, mode UnknownFieldMode) Result {
 	newObject := toUnstructured(object)
 	old := toUnstructured(oldObject)

@@ -1,3 +1,12 @@
+// Package template provides deterministic, hermetic text/template rendering with
+// Sprig functions, YAML helpers, output limits, and strict missing-key handling.
+//
+// By default, the template engine operates hermetically. Functions that read from
+// the host environment, query DNS, read clocks, or generate random numbers are disabled.
+// This ensures template rendering produces identical output across different environments.
+//
+// Accessing missing keys in maps causes an immediate error by default ([MissingKeyError]),
+// preventing silently omitted configuration values.
 package template
 
 import (
@@ -14,18 +23,23 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// MissingKeyMode controls how the template engine behaves when accessing missing map keys.
 type MissingKeyMode string
 
 const (
-	MissingKeyError   MissingKeyMode = "error"
-	MissingKeyZero    MissingKeyMode = "zero"
+	// MissingKeyError stops execution immediately with an error when a missing key is accessed.
+	MissingKeyError MissingKeyMode = "error"
+	// MissingKeyZero sets the missing value to the zero value of its type.
+	MissingKeyZero MissingKeyMode = "zero"
+	// MissingKeyDefault outputs "<no value>" for missing map keys.
 	MissingKeyDefault MissingKeyMode = "default"
 )
 
+// SprigMode configures which Sprig functions are exposed to templates.
 type SprigMode int
 
 const (
-	// SprigHermetic excludes environment, clock, random, and network functions.
+	// SprigHermetic excludes non-deterministic functions (environment, clock, random, and network).
 	SprigHermetic SprigMode = iota
 	// SprigFull exposes the complete Sprig text function map.
 	SprigFull
@@ -33,11 +47,15 @@ const (
 	SprigDisabled
 )
 
+// Input specifies the name and source content of a template to render.
 type Input struct {
-	Name   string
+	// Name identifies the template for error reporting and debugging.
+	Name string
+	// Source contains the raw template text.
 	Source []byte
 }
 
+// Engine executes text/template inputs with configured delimiters, functions, and safety bounds.
 type Engine struct {
 	funcs      texttemplate.FuncMap
 	missingKey MissingKeyMode
@@ -58,8 +76,10 @@ type engineConfig struct {
 	yamlFuncs  bool
 }
 
+// Option configures an Engine instance.
 type Option func(*engineConfig)
 
+// WithFuncs registers custom template functions.
 func WithFuncs(funcs texttemplate.FuncMap) Option {
 	return func(c *engineConfig) {
 		for name, fn := range funcs {
@@ -68,16 +88,29 @@ func WithFuncs(funcs texttemplate.FuncMap) Option {
 	}
 }
 
+// WithHermeticSprig enables Sprig functions excluding environment, clock, random, and network functions.
 func WithHermeticSprig() Option { return func(c *engineConfig) { c.sprig = SprigHermetic } }
-func WithFullSprig() Option     { return func(c *engineConfig) { c.sprig = SprigFull } }
-func WithoutSprig() Option      { return func(c *engineConfig) { c.sprig = SprigDisabled } }
+
+// WithFullSprig enables all standard Sprig text functions.
+func WithFullSprig() Option { return func(c *engineConfig) { c.sprig = SprigFull } }
+
+// WithoutSprig disables all Sprig functions.
+func WithoutSprig() Option { return func(c *engineConfig) { c.sprig = SprigDisabled } }
+
+// WithoutYAMLFunctions disables the built-in toYaml and fromYaml template functions.
 func WithoutYAMLFunctions() Option {
 	return func(c *engineConfig) { c.yamlFuncs = false }
 }
+
+// WithMissingKey configures the behavior when referencing an absent map key.
 func WithMissingKey(mode MissingKeyMode) Option {
 	return func(c *engineConfig) { c.missingKey = mode }
 }
+
+// WithMissingKeyError configures the engine to fail if a template accesses an absent map key.
 func WithMissingKeyError() Option { return WithMissingKey(MissingKeyError) }
+
+// WithDelims sets custom left and right template delimiters (e.g. "[[" and "]]").
 func WithDelims(left, right string) Option {
 	return func(c *engineConfig) {
 		c.leftDelim = left
@@ -85,10 +118,12 @@ func WithDelims(left, right string) Option {
 	}
 }
 
+// WithMaxOutput sets the maximum rendered output byte limit per template execution.
 func WithMaxOutput(bytes int64) Option { return func(c *engineConfig) { c.maxOutput = bytes } }
 
 var functionName = regexp.MustCompile(`^[[:alnum:]_]+$`)
 
+// New creates a new Engine with the provided configuration options.
 func New(options ...Option) (*Engine, error) {
 	cfg := engineConfig{
 		funcs:      texttemplate.FuncMap{},
@@ -174,6 +209,21 @@ func fromYAML(value string) (any, error) {
 	return out, nil
 }
 
+// Render parses and executes a template against data, returning the rendered output.
+//
+// Example:
+//
+//	engine, err := template.New(template.WithMissingKeyError())
+//	if err != nil {
+//		return err
+//	}
+//	output, err := engine.Render(ctx, template.Input{
+//		Name:   "deployment.yaml",
+//		Source: []byte("replicas: {{ .config.spec.replicas }}"),
+//	}, contextData)
+//
+// It returns an error if ctx is canceled, if template syntax is invalid, if a
+// missing map key is referenced under [MissingKeyError], or if output exceeds [WithMaxOutput].
 func (e *Engine) Render(ctx context.Context, input Input, data any) ([]byte, error) {
 	if e == nil {
 		return nil, fmt.Errorf("template engine is nil")
@@ -206,6 +256,7 @@ func (e *Engine) Render(ctx context.Context, input Input, data any) ([]byte, err
 	return buffer.Bytes(), nil
 }
 
+// ErrOutputLimit is returned when template rendering exceeds the configured maximum output limit.
 var ErrOutputLimit = errors.New("template output limit exceeded")
 
 type contextWriter struct {
