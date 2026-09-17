@@ -2,8 +2,10 @@ GO ?= go
 LOCALBIN ?= $(shell pwd)/bin
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_VERSION ?= v2.12.2
+COVERAGE_OUT ?= $(LOCALBIN)/coverage.out
+COVERAGE_HTML ?= $(LOCALBIN)/coverage.html
 
-.PHONY: help test test-consumer test-cert-manager fmt fmt-check vet lint tidy check
+.PHONY: help test test-cover test-cover-html test-consumer test-cert-manager fmt fmt-check vet lint tidy check
 
 ##@ General
 
@@ -14,6 +16,15 @@ help: ## Display this help.
 
 test: ## Run tests for the library module.
 	$(GO) test ./...
+
+test-cover: | $(LOCALBIN) ## Run library tests with statement coverage summary.
+	$(GO) test -coverprofile=$(COVERAGE_OUT) ./...
+	$(GO) tool cover -func=$(COVERAGE_OUT)
+
+test-cover-html: | $(LOCALBIN) ## Generate HTML test coverage report.
+	$(GO) test -coverprofile=$(COVERAGE_OUT) ./...
+	$(GO) tool cover -html=$(COVERAGE_OUT) -o $(COVERAGE_HTML)
+	@echo "Coverage report generated at $(COVERAGE_HTML)"
 
 test-consumer: ## Run tests for the consumer example module.
 	cd examples/consumer && $(GO) test ./...

@@ -1,5 +1,8 @@
 # libkubara
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/kubara-io/libkubara.svg)](https://pkg.go.dev/github.com/kubara-io/libkubara)
+[![CI](https://github.com/kubara-io/libkubara/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/kubara-io/libkubara/actions/workflows/ci.yaml)
+
 In-process Kubernetes CRD validation, structural defaulting, and manifest handling without a running cluster.
 
 Validating Kubernetes Custom Resources usually requires a full running cluster. Developers often set up `envtest`, spin up local kind or minikube clusters, or maintain duplicate Go structs and JSON Schemas that drift from the real CRD definition.
