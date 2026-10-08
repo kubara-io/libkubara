@@ -361,7 +361,7 @@ func (v *Validator) validate(ctx context.Context, object, oldObject *unstructure
 		}
 	}
 
-	result.errors = append(result.errors, schemaobjectmeta.Validate(nil, result.object.Object, version.structural, true)...)
+	result.errors = append(result.errors, schemaobjectmeta.Validate(ctx, nil, result.object.Object, version.structural, true)...)
 	result.errors = append(result.errors, structurallisttype.ValidateListSetsAndMaps(nil, version.structural, result.object.Object)...)
 	if oldObject == nil && version.cel != nil {
 		celErrors, _ := version.cel.Validate(ctx, nil, version.structural, result.object.Object, nil, celconfig.RuntimeCELCostBudget)
